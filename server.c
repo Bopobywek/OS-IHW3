@@ -7,8 +7,18 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <semaphore.h>
+#include <time.h>
+#include "common.h"
+
 
 #define MAXPENDING 5 
+
+const char *shared_object = "/posix-shared-object";
+const char *sem_shared_object = "/posix-sem-shared-object";
 
 int createServerSocket(in_addr_t sin_addr, int port) {
     int server_socket;
@@ -54,29 +64,183 @@ int acceptClientConnection(int server_socket) {
     return client_socket;
 }
 
-void handle(int client_socket) {
+void printField(int *field, int columns, int rows)
+{
+    for (int i = 0; i < rows; ++i)
+    {
+        for (int j = 0; j < columns; ++j)
+        {
+            if (field[i * columns + j] < 0)
+            {
+                printf("X ");
+            }
+            else
+            {
+                printf("%d ", field[i * columns + j]);
+            }
+        }
+        printf("\n");
+    }
+
+    fflush(stdout);
+}
+
+void handleGardenPlot(sem_t *semaphores, int *field, int columns, struct GardenerTask task)
+{
+    sem_wait(semaphores + (task.plot_i / 2 * (columns / 2) + task.plot_j / 2));
+    // printf("Gardener %d takes (row: %d, col: %d) plot\n", task.gardener_id, task.plot_i, task.plot_j);
+    // fflush(stdout);
+    if (field[task.plot_i * columns + task.plot_j] == 0)
+    {
+        field[task.plot_i * columns + task.plot_j] = task.gardener_id;
+        usleep(task.working_time * 1000);
+    }
+    else
+    {
+        usleep(task.working_time / EMPTY_PLOT_COEFFICIENT * 1000);
+    }
+
+    printField(field, columns, columns);
+    printf("\n");
+    sem_post(semaphores + (task.plot_i / 2 * (columns / 2) + task.plot_j / 2));
+}
+
+
+void handle(int client_socket, sem_t *semaphores, int *field, struct FieldSize field_size) {
     char echoBuffer[1024];
     int recvMsgSize;
 
-    if ((recvMsgSize = recv(client_socket, echoBuffer, 1024, 0)) < 0) {
-        perror("recv() bad");
+    if (send(client_socket, (char *)(&field_size), sizeof(field_size), 0) != sizeof(field_size)) {
+        perror("send() bad");
         exit(-1);
     }
 
-    while (recvMsgSize > 0)
-    {
-        if (send(client_socket, echoBuffer, recvMsgSize, 0) != recvMsgSize) {
+    // Десериализация объекта
+    struct GardenerTask task;
+
+    if ((recvMsgSize = recv(client_socket, echoBuffer, sizeof(struct GardenerTask), 0)) < 0) {
+            perror("recv() bad");
+            exit(-1);
+    }
+    task = *((struct GardenerTask *)echoBuffer);
+
+    while (task.status != 1) {
+        handleGardenPlot(semaphores, field, field_size.columns, task);
+
+        const char success_message[] = "Success";
+        if (send(client_socket, success_message, sizeof(success_message), 0) != sizeof(success_message)) {
             perror("send() bad");
             exit(-1);
         }
 
-        if ((recvMsgSize = recv(client_socket, echoBuffer, 1024, 0)) < 0) {
+        if ((recvMsgSize = recv(client_socket, echoBuffer, sizeof(struct GardenerTask), 0)) < 0) {
             perror("recv() bad");
             exit(-1);
         }
+        task = *((struct GardenerTask *)echoBuffer);
+    }
+    const char success_message[] = "Success";
+    if (send(client_socket, success_message, sizeof(success_message), 0) != sizeof(success_message)) {
+        perror("send() bad");
+        exit(-1);
     }
 
     close(client_socket); 
+}
+
+int *getField(int field_size) {
+    int *field;
+    int shmid;
+
+    if ((shmid = shm_open(shared_object, O_CREAT | O_RDWR, 0666)) < 0) {
+        perror("Can't connect to shared memory");
+        exit(-1);
+    } else {
+        if (ftruncate(shmid, field_size * sizeof(int)) < 0)
+        {
+            perror("Can't resize shared memory");
+            exit(-1);
+        }
+        if ((field = mmap(0, field_size * sizeof(int), PROT_WRITE | PROT_READ, MAP_SHARED, shmid, 0)) < 0)
+        {
+            printf("Can't connect to shared memory\n");
+            exit(-1);
+        };
+        printf("Open shared Memory\n");
+    }
+
+    return field;
+}
+
+void initializeField(int *field, int rows, int columns)
+{
+    for (int i = 0; i < rows; ++i)
+    {
+        for (int j = 0; j < columns; ++j)
+        {
+            field[i * columns + j] = 0;
+        }
+    }
+
+    int percentage = 10 + random() % 20;
+    int count_of_bad_plots = columns * rows * percentage / 100;
+    for (int i = 0; i < count_of_bad_plots; ++i)
+    {
+        int row_index;
+        int column_index;
+        do
+        {
+            row_index = random() % rows;
+            column_index = random() % columns;
+        } while (field[row_index * columns + column_index] == -1);
+
+        field[row_index * columns + column_index] = -1;
+    }
+}
+
+void createSemaphores(sem_t *semaphores, int count)
+{
+    for (int k = 0; k < count; ++k)
+    {
+        if (sem_init(semaphores + k, 1, 1) < 0)
+        {
+            perror("sem_init: can not create semaphore");
+            exit(-1);
+        };
+
+        int val;
+        sem_getvalue(semaphores + k, &val);
+        if (val != 1)
+        {
+            printf("Ooops, one of semaphores can't set initial value to 1. Please, restart server.\n");
+            shm_unlink(shared_object);
+            exit(-1);
+        }
+    }
+}
+
+sem_t *createSemaphoresSharedMemory(int sem_count) {
+    int sem_main_shmid;
+    sem_t *semaphores;
+
+    if ((sem_main_shmid = shm_open(sem_shared_object, O_CREAT | O_RDWR, 0666)) < 0) {
+        perror("Can't connect to shared memory");
+        exit(-1);
+    } else {
+        if (ftruncate(sem_main_shmid, sem_count * sizeof(sem_t)) < 0)
+        {
+            perror("Can't rezie shm");
+            exit(-1);
+        }
+        if ((semaphores = mmap(0, sem_count * sizeof(sem_t), PROT_WRITE | PROT_READ, MAP_SHARED, sem_main_shmid, 0)) < 0)
+        {
+            printf("Can\'t connect to shared memory for semaphores\n");
+            exit(-1);
+        };
+        printf("Open shared Memory for semaphores\n");
+    }
+
+    return semaphores;
 }
 
 int server_socket;
@@ -98,6 +262,8 @@ void waitChildProcessess() {
 void sigint_handler(int signum) {
     printf("Server stopped\n");
     waitChildProcessess();
+    shm_unlink(shared_object);
+    shm_unlink(sem_shared_object);
     close(server_socket);
     exit(0);
 }
@@ -121,11 +287,22 @@ int main(int argc, char *argv[]) {
         exit(-1);
     }
 
-    server_socket = createServerSocket(server_address, server_port);
     signal(SIGINT, sigint_handler);
 
-    while (1)
-    {
+    // TODO: Создается поле, по которому ходят форки
+    int rows = 4;
+    int columns = 4;
+    int sem_count = rows * columns / 4;
+
+    int *field = getField(rows * columns);
+    initializeField(field, rows, columns);
+
+    sem_t *semaphores = createSemaphoresSharedMemory(sem_count);
+    createSemaphores(semaphores, sem_count);
+
+    server_socket = createServerSocket(server_address, server_port);
+    printField(field, columns, rows);
+    while (1) {
         int client_socket = acceptClientConnection(server_socket);
 
         pid_t child_id;
@@ -135,16 +312,33 @@ int main(int argc, char *argv[]) {
         }
         else if (child_id == 0)
         {
+            struct FieldSize field_size;
+            field_size.columns = columns;
+            field_size.rows = rows;
+
             signal(SIGINT, SIG_DFL);
             close(server_socket);
-            handle(client_socket);
+            handle(client_socket, semaphores, field, field_size);
             exit(0);
         }
 
         printf("with child process: %d\n", (int) child_id);
         close(client_socket);
         children_counter++;
+
+        // while (children_counter > 0)
+        // {
+        //     int child_id = waitpid((pid_t) -1, NULL, WNOHANG);
+        //     if (child_id < 0) {
+        //         perror("Unable to wait child proccess");
+        //         exit(-1);
+        //     } else if (child_id == 0) {
+        //         break;
+        //     } else {
+        //         children_counter--;
+        //     }
+        // }
     }
-    
+
     return 0;
 }

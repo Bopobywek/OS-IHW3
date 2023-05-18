@@ -4,6 +4,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "common.h"
+
+void handleGardenPlot(int client_socket, struct GardenerTask task) {
+    char buffer[256];
+    int received;
+    do {
+        // (char *)(&task) -- сериализация, передаем структуру по байтам
+        if (send(client_socket, (char *)(&task), sizeof(task), 0) != sizeof(task)) {
+            perror("send() bad");
+            exit(-1);
+        }
+
+        if ((received = recv(client_socket, buffer, sizeof(buffer), 0)) <= 0) {
+            perror("recv() bad");
+            exit(-1);
+        }
+    } while (buffer[0] != 'S');
+}
 
 int main(int argc, char *argv[])
 {
@@ -16,22 +34,17 @@ int main(int argc, char *argv[])
     unsigned int echoStringLen;
     int bytesRcvd, totalBytesRcvd;
 
-    if (argc != 4)    /* Test for correct number of arguments */
+    if (argc != 3)
     {
-       fprintf(stderr, "Usage: %s <Server address> <Server port> <Echo string>\n",
+       fprintf(stderr, "Usage: %s <Server address> <Server port>\n",
                argv[0]);
        exit(1);
     }
 
     servIP = argv[1];             /* First arg: server IP address (dotted quad) */
-    echoString = argv[3];         /* Second arg: string to echo */
 
-    if (argc == 4)
-        echoServPort = atoi(argv[2]); /* Use given port, if any */
-    else
-        echoServPort = 7;  /* 7 is the well-known port for the echo service */
+    echoServPort = atoi(argv[2]);
 
-    /* Create a reliable, stream socket using TCP */
     if ((sock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
         perror("Unable to create client socket");
         exit(-1);
@@ -49,33 +62,69 @@ int main(int argc, char *argv[])
         exit(-1);
     }
 
-    echoStringLen = strlen(echoString);          /* Determine input length */
+    struct FieldSize field_size;
+    if ((bytesRcvd = recv(sock, echoBuffer, sizeof(field_size), 0)) <= 0) {
+        perror("recv() bad");
+        exit(-1);
+    }
 
-    for(int i = 0; i < 10; ++i) {
-        /* Send the string to the server */
-        if (send(sock, echoString, echoStringLen, 0) != echoStringLen) {
-                perror("send() bad");
-                exit(-1);
-            }
+    field_size = *((struct FieldSize *)echoBuffer);
+    int rows = field_size.rows;
+    int columns = field_size.columns;
 
-        /* Receive the same string back from the server */
-        totalBytesRcvd = 0;
-        printf("%d) Received: ", i);            // Setup to print the echoed string
-        while (totalBytesRcvd < echoStringLen) {
-            /* Receive up to the buffer size (minus 1 to leave space for
-            a null terminator) bytes from the sender */
-            if ((bytesRcvd = recv(sock, echoBuffer, 1024 - 1, 0)) <= 0) {
-                perror("recv() bad");
-                exit(-1);
-            }
-            totalBytesRcvd += bytesRcvd;   /* Keep tally of total bytes */
-            echoBuffer[bytesRcvd] = '\0';  /* Terminate the string! */
-            printf("%s", echoBuffer);      /* Print the echo buffer */
+    struct GardenerTask task;
+    task.gardener_id = 1;
+    task.working_time = 500;
+
+    int i = 0;
+    int j = 0;
+    task.status = 0;
+    while (i < rows) {
+        while (j < columns)
+        {
+            task.plot_i = i;
+            task.plot_j = j;
+            handleGardenPlot(sock, task);
+            ++j;
         }
 
-        printf("\n");    /* Print a final linefeed */
-        sleep(2);
+        ++i;
+        --j;
+
+        while (j >= 0)
+        {
+            task.plot_i = i;
+            task.plot_j = j;
+            handleGardenPlot(sock, task);
+            --j;
+        }
+
+        ++i;
+        ++j;
     }
+
+    task.status = 1;
+    handleGardenPlot(sock, task);
+
+    // /* Send the string to the server */
+    
+
+    // /* Receive the same string back from the server */
+    // totalBytesRcvd = 0;
+    // printf("%d) Received: ", 0);            // Setup to print the echoed string
+    // while (totalBytesRcvd < echoStringLen) {
+    //     /* Receive up to the buffer size (minus 1 to leave space for
+    //     a null terminator) bytes from the sender */
+    //     if ((bytesRcvd = recv(sock, echoBuffer, 1024 - 1, 0)) <= 0) {
+    //         perror("recv() bad");
+    //         exit(-1);
+    //     }
+    //     totalBytesRcvd += bytesRcvd;   /* Keep tally of total bytes */
+    //     echoBuffer[bytesRcvd] = '\0';  /* Terminate the string! */
+    //     printf("%s", echoBuffer);      /* Print the echo buffer */
+    // }
+
+    // printf("\n");    /* Print a final linefeed */
 
     close(sock);
     exit(0);
