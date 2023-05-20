@@ -43,4 +43,8 @@ void sendHandleRequest(int client_socket, struct GardenerTask task) {
             exit(-1);
         }
     } while (status != 1);
+
+    if (task.status != 1) {
+        printf("Gardener %d handle plot (%d, %d)\n", task.gardener_id, task.plot_i, task.plot_j);
+    }
 }
