@@ -1,5 +1,5 @@
-struct GardenerTask
-{
+
+struct GardenerTask {
     int plot_i;
     int plot_j;
     int gardener_id;
@@ -7,10 +7,13 @@ struct GardenerTask
     int status;
 };
 
-struct FieldSize
-{
+struct FieldSize {
     int rows;
     int columns;
 };
 
 #define EMPTY_PLOT_COEFFICIENT 2
+#define BUFFER_SIZE 256
+
+int createClientSocket(char *server_ip, int server_port);
+void sendHandleRequest(int client_socket, struct GardenerTask task);

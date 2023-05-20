@@ -1,10 +1,10 @@
-all: server client client2
+all: server first_gardener second_gardener
 
-server: server.c
-	gcc server.c -o server -lrt -lpthread
+server: server.c common.c
+	gcc server.c common.c -o server -lrt -lpthread
 
-client: client.c
-	gcc client.c -o client
+first_gardener: first_gardener.c common.c
+	gcc first_gardener.c common.c -o first_gardener
 
-client2: client2.c
-	gcc client2.c -o client2
+second_gardener: second_gardener.c common.c
+	gcc second_gardener.c common.c -o second_gardener
