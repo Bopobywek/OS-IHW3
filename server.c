@@ -18,6 +18,7 @@
 
 const char *shared_object = "/posix-shared-object";
 const char *sem_shared_object = "/posix-sem-shared-object";
+int pipe_fd[2];
 
 int createServerSocket(in_addr_t sin_addr, int port) {
     int server_socket;
@@ -79,10 +80,45 @@ void printField(int *field, int columns, int rows) {
     fflush(stdout);
 }
 
+void sprintField(char *buffer, int *field, int columns, int rows) {
+    int offset = 0;
+    for (int i = 0; i < rows; ++i) {
+        for (int j = 0; j < columns; ++j) {
+            if (field[i * columns + j] < 0) {
+                offset += sprintf(buffer + offset, "X ");
+            } else {
+                offset += sprintf(buffer + offset, "%d ", field[i * columns + j]);
+            }
+        }
+        offset += sprintf(buffer + offset, "\n");
+    }
+}
+
+void setEventWithCurrentTime(struct Event *event) {
+    time_t timer;
+    struct tm *tm_info;
+    timer = time(NULL);
+    tm_info = localtime(&timer);
+    strftime(event->timestamp, sizeof(event->timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+}
+
+void writeEventToPipe(struct Event *event) {
+    if (write(pipe_fd[1], event, sizeof(*event)) < 0) {
+        perror("Can't write to pipe");
+        exit(-1);
+    }
+}
+
 void handleGardenPlot(sem_t *semaphores, int *field, int columns, struct GardenerTask task) {
     sem_wait(semaphores + (task.plot_i / 2 * (columns / 2) + task.plot_j / 2));
-    // printf("Gardener %d takes (row: %d, col: %d) plot\n", task.gardener_id, task.plot_i,
-    // task.plot_j); fflush(stdout);
+
+    struct Event gardener_event;
+    setEventWithCurrentTime(&gardener_event);
+    gardener_event.type = ACTION;
+    sprintf(gardener_event.buffer, "Gardener %d takes (row: %d, col: %d) plot\n", task.gardener_id,
+            task.plot_i, task.plot_j);
+    writeEventToPipe(&gardener_event);
+
     if (field[task.plot_i * columns + task.plot_j] == 0) {
         field[task.plot_i * columns + task.plot_j] = task.gardener_id;
         usleep(task.working_time * 1000);
@@ -90,8 +126,16 @@ void handleGardenPlot(sem_t *semaphores, int *field, int columns, struct Gardene
         usleep(task.working_time / EMPTY_PLOT_COEFFICIENT * 1000);
     }
 
-    printField(field, columns, columns);
-    printf("\n");
+    // printField(field, columns, columns);
+    // printf("\n");
+
+    struct Event event;
+    setEventWithCurrentTime(&event);
+    sprintf(event.buffer, "\n");
+    sprintField(event.buffer + 1, field, columns, columns);
+    event.type = MAP;
+    writeEventToPipe(&event);
+
     sem_post(semaphores + (task.plot_i / 2 * (columns / 2) + task.plot_j / 2));
 }
 
@@ -222,6 +266,32 @@ sem_t *createSemaphoresSharedMemory(int sem_count) {
     return semaphores;
 }
 
+void writeInfoToConsole() {
+    while (1) {
+        struct Event event;
+        if (read(pipe_fd[0], &event, sizeof(event)) < 0) {
+            perror("Can't read from pipe");
+            exit(-1);
+        }
+        if (event.type == MAP) {
+            printf("%s | %s\n", event.timestamp, event.buffer);
+        }
+    }
+}
+
+pid_t runWriter() {
+    pid_t child_id;
+    if ((child_id = fork()) < 0) {
+        perror("Unable to create child for handling write to log");
+        exit(-1);
+    } else if (child_id == 0) {
+        writeInfoToConsole();
+        exit(0);
+    }
+
+    return child_id;
+}
+
 int server_socket;
 int children_counter = 0;
 
@@ -264,6 +334,13 @@ int main(int argc, char *argv[]) {
         perror("Invalid server port");
         exit(-1);
     }
+
+    if (pipe(pipe_fd) < 0) {
+        perror("Can't open pipe");
+        exit(-1);
+    }
+
+    runWriter();
 
     signal(SIGINT, sigint_handler);
 
