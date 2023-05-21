@@ -183,28 +183,42 @@ void handle(int client_socket, sem_t *semaphores, int *field, struct FieldSize f
         0) {
         publishLostConnectionMessage(task.gardener_id);
         exit(0);
+    } else if (bytes_received != sizeof(struct GardenerTask)) {
+        perror("Invalid recv()");
+        exit(-1);
     }
     task = *((struct GardenerTask *)buffer);
 
     while (task.status != 1) {
         handleGardenPlot(semaphores, field, field_size.columns, task);
 
-        if (send(client_socket, &plot_handle_status, sizeof(int), MSG_NOSIGNAL) != sizeof(int)) {
+        int sent;
+        if ((sent = send(client_socket, &plot_handle_status, sizeof(int), MSG_NOSIGNAL)) < 0) {
             publishLostConnectionMessage(task.gardener_id);
             exit(0);
+        } else if (sent != sizeof(int)) {
+            perror("Invalid send()");
+            exit(-1);
         }
 
         if ((bytes_received =
                  recv(client_socket, buffer, sizeof(struct GardenerTask), MSG_NOSIGNAL)) < 0) {
             publishLostConnectionMessage(task.gardener_id);
             exit(0);
+        } else if (bytes_received != sizeof(struct GardenerTask)) {
+            perror("Invalid recv()");
+            exit(-1);
         }
         task = *((struct GardenerTask *)buffer);
     }
 
-    if (send(client_socket, &plot_handle_status, sizeof(int), 0) != sizeof(int)) {
+    int sent;
+    if ((sent = send(client_socket, &plot_handle_status, sizeof(int), MSG_NOSIGNAL)) < 0) {
         publishLostConnectionMessage(task.gardener_id);
         exit(0);
+    } else if (sent != sizeof(int)) {
+        perror("Invalid send()");
+        exit(-1);
     }
 
     close(client_socket);
