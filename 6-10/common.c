@@ -32,15 +32,16 @@ void sendHandleRequest(int client_socket, struct GardenerTask task) {
     int status;
     int received;
     do {
-        // &task -- подобие сериализацие, передаем структуру по байтам
-        if (send(client_socket, &task, sizeof(task), 0) != sizeof(task)) {
-            perror("send() bad");
-            exit(-1);
+        // &task -- подобие сериализации, передаем структуру по байтам
+        int sent;
+        if ((sent = send(client_socket, &task, sizeof(task), MSG_NOSIGNAL)) != sizeof(task)) {
+            printf("Server closed the connection...\n");
+            exit(0);
         }
 
-        if ((received = recv(client_socket, &status, sizeof(int), 0)) != sizeof(int)) {
-            perror("recv() bad");
-            exit(-1);
+        if ((received = recv(client_socket, &status, sizeof(int), MSG_NOSIGNAL)) != sizeof(int)) {
+            printf("Server closed the connection...\n");
+            exit(0);
         }
     } while (status != 1);
 

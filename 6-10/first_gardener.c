@@ -63,10 +63,10 @@ int main(int argc, char *argv[]) {
     client_socket = createClientSocket(server_ip, server_port);
 
     struct FieldSize field_size;
-    if ((bytes_received = recv(client_socket, &field_size, sizeof(field_size), 0)) !=
+    if ((bytes_received = recv(client_socket, &field_size, sizeof(field_size), MSG_NOSIGNAL)) !=
         sizeof(field_size)) {
-        perror("recv() bad");
-        exit(-1);
+        printf("Server closed the connection...\n");
+        exit(0);
     }
 
     work(client_socket, working_time, field_size);

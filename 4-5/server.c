@@ -126,9 +126,6 @@ void handleGardenPlot(sem_t *semaphores, int *field, int columns, struct Gardene
         usleep(task.working_time / EMPTY_PLOT_COEFFICIENT * 1000);
     }
 
-    // printField(field, columns, columns);
-    // printf("\n");
-
     struct Event event;
     setEventWithCurrentTime(&event);
     sprintf(event.buffer, "\n");
@@ -344,8 +341,12 @@ int main(int argc, char *argv[]) {
 
     signal(SIGINT, sigint_handler);
 
-    // TODO: Создается поле, по которому ходят форки
     int square_side_size = atoi(argv[3]);
+    if (square_side_size > 10 || square_side_size < 2) {
+        perror("Square side size should be in range [2, 10]");
+        exit(-1);
+    }
+
     int rows = 2 * square_side_size;
     int columns = 2 * square_side_size;
     int sem_count = rows * columns / 4;
@@ -379,19 +380,6 @@ int main(int argc, char *argv[]) {
         printf("with child process: %d\n", (int)child_id);
         close(client_socket);
         children_counter++;
-
-        // while (children_counter > 0)
-        // {
-        //     int child_id = waitpid((pid_t) -1, NULL, WNOHANG);
-        //     if (child_id < 0) {
-        //         perror("Unable to wait child proccess");
-        //         exit(-1);
-        //     } else if (child_id == 0) {
-        //         break;
-        //     } else {
-        //         children_counter--;
-        //     }
-        // }
     }
 
     return 0;

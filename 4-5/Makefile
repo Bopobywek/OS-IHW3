@@ -8,3 +8,6 @@ first_gardener: first_gardener.c common.c
 
 second_gardener: second_gardener.c common.c
 	gcc second_gardener.c common.c -o second_gardener
+
+clean:
+	rm server first_gardener second_gardener

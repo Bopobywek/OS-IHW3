@@ -141,12 +141,6 @@ void handleGardenPlot(sem_t *semaphores, int *field, int columns, struct Gardene
     event.type = MAP;
     writeEventToPipe(&event);
 
-    struct Event finish_event;
-    setEventWithCurrentTime(&finish_event);
-    finish_event.type = ACTION;
-    sprintf(finish_event.buffer, "Gardener %d finish work\n", task.gardener_id);
-    writeEventToPipe(&finish_event);
-
     sem_post(semaphores + (task.plot_i / 2 * (columns / 2) + task.plot_j / 2));
 }
 
@@ -179,13 +173,11 @@ void handle(int client_socket, sem_t *semaphores, int *field, struct FieldSize f
     struct GardenerTask task;
     const int plot_handle_status = 1;
 
-    if ((bytes_received = recv(client_socket, buffer, sizeof(struct GardenerTask), MSG_NOSIGNAL)) <
-        0) {
+    if ((bytes_received = recv(client_socket, buffer, sizeof(struct GardenerTask), MSG_NOSIGNAL)) !=
+        sizeof(struct GardenerTask)) {
         publishLostConnectionMessage(task.gardener_id);
+        close(client_socket);
         exit(0);
-    } else if (bytes_received != sizeof(struct GardenerTask)) {
-        perror("Invalid recv()");
-        exit(-1);
     }
     task = *((struct GardenerTask *)buffer);
 
@@ -193,32 +185,34 @@ void handle(int client_socket, sem_t *semaphores, int *field, struct FieldSize f
         handleGardenPlot(semaphores, field, field_size.columns, task);
 
         int sent;
-        if ((sent = send(client_socket, &plot_handle_status, sizeof(int), MSG_NOSIGNAL)) < 0) {
+        if ((sent = send(client_socket, &plot_handle_status, sizeof(int), MSG_NOSIGNAL)) !=
+            sizeof(int)) {
             publishLostConnectionMessage(task.gardener_id);
+            close(client_socket);
             exit(0);
-        } else if (sent != sizeof(int)) {
-            perror("Invalid send()");
-            exit(-1);
         }
 
-        if ((bytes_received =
-                 recv(client_socket, buffer, sizeof(struct GardenerTask), MSG_NOSIGNAL)) < 0) {
+        if ((bytes_received = recv(client_socket, buffer, sizeof(struct GardenerTask),
+                                   MSG_NOSIGNAL)) != sizeof(struct GardenerTask)) {
             publishLostConnectionMessage(task.gardener_id);
+            close(client_socket);
             exit(0);
-        } else if (bytes_received != sizeof(struct GardenerTask)) {
-            perror("Invalid recv()");
-            exit(-1);
         }
         task = *((struct GardenerTask *)buffer);
     }
 
+    struct Event finish_event;
+    setEventWithCurrentTime(&finish_event);
+    finish_event.type = ACTION;
+    sprintf(finish_event.buffer, "Gardener %d finish work\n", task.gardener_id);
+    writeEventToPipe(&finish_event);
+
     int sent;
-    if ((sent = send(client_socket, &plot_handle_status, sizeof(int), MSG_NOSIGNAL)) < 0) {
+    if ((sent = send(client_socket, &plot_handle_status, sizeof(int), MSG_NOSIGNAL)) !=
+        sizeof(int)) {
         publishLostConnectionMessage(task.gardener_id);
+        close(client_socket);
         exit(0);
-    } else if (sent != sizeof(int)) {
-        perror("Invalid send()");
-        exit(-1);
     }
 
     close(client_socket);
@@ -351,7 +345,7 @@ void *writeInfoToConsole(void *args) {
         sem_wait(sem);
         for (int i = 0; i < 100; ++i) {
             if (observers[i].is_active == 1) {
-                if (send(observers[i].socket, buffer, size, MSG_NOSIGNAL) < 0) {
+                if (send(observers[i].socket, buffer, size, MSG_NOSIGNAL) <= 0) {
                     observers[i].is_active = 0;
                     close(observers[i].socket);
                     printf("Observer disconnected\n");
@@ -429,6 +423,8 @@ void waitChildProcessess() {
     }
 }
 
+int personal_client_socket;
+
 void sigint_handler(int signum) {
     printf("Server stopped\n");
     waitChildProcessess();
@@ -439,6 +435,11 @@ void sigint_handler(int signum) {
     shm_unlink(observers_shared_object);
     close(server_socket);
     close(observer_socket);
+    exit(0);
+}
+
+void child_sigint_handler(int signum) {
+    close(personal_client_socket);
     exit(0);
 }
 
@@ -474,10 +475,15 @@ int main(int argc, char *argv[]) {
         exit(-1);
     }
 
-    // TODO: Создается поле, по которому ходят форки
     int square_side_size = atoi(argv[4]);
+    if (square_side_size > 10 || square_side_size < 2) {
+        perror("Square side size should be in range [2, 10]");
+        exit(-1);
+    }
+
     int rows = 2 * square_side_size;
     int columns = 2 * square_side_size;
+
     // +1 под семафор для observers
     int sem_count = rows * columns / 4 + 1;
 
@@ -520,7 +526,8 @@ int main(int argc, char *argv[]) {
             field_size.columns = columns;
             field_size.rows = rows;
 
-            signal(SIGINT, SIG_DFL);
+            personal_client_socket = client_socket;
+            signal(SIGINT, child_sigint_handler);
             close(server_socket);
             handle(client_socket, semaphores, field, field_size);
             exit(0);
