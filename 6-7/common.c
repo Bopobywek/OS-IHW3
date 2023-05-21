@@ -32,7 +32,7 @@ void sendHandleRequest(int client_socket, struct GardenerTask task) {
     int status;
     int received;
     do {
-        // &task -- сериализация, передаем структуру по байтам
+        // &task -- подобие сериализацие, передаем структуру по байтам
         if (send(client_socket, &task, sizeof(task), 0) != sizeof(task)) {
             perror("send() bad");
             exit(-1);

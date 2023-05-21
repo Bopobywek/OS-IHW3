@@ -129,15 +129,18 @@ void handleGardenPlot(sem_t *semaphores, int *field, int columns, struct Gardene
         usleep(task.working_time / EMPTY_PLOT_COEFFICIENT * 1000);
     }
 
-    // printField(field, columns, columns);
-    // printf("\n");
-
     struct Event event;
     setEventWithCurrentTime(&event);
     sprintf(event.buffer, "\n");
     sprintField(event.buffer + 1, field, columns, columns);
     event.type = MAP;
     writeEventToPipe(&event);
+
+    struct Event finish_event;
+    setEventWithCurrentTime(&finish_event);
+    finish_event.type = ACTION;
+    sprintf(finish_event.buffer, "Gardener %d finish work\n", task.gardener_id);
+    writeEventToPipe(&gardener_event);
 
     sem_post(semaphores + (task.plot_i / 2 * (columns / 2) + task.plot_j / 2));
 }
@@ -391,6 +394,7 @@ void sigint_handler(int signum) {
     shm_unlink(sem_shared_object);
     shm_unlink(observers_shared_object);
     close(server_socket);
+    close(observer_socket);
     exit(0);
 }
 
@@ -475,19 +479,6 @@ int main(int argc, char *argv[]) {
         printf("with child process: %d\n", (int)child_id);
         close(client_socket);
         children_counter++;
-
-        // while (children_counter > 0)
-        // {
-        //     int child_id = waitpid((pid_t) -1, NULL, WNOHANG);
-        //     if (child_id < 0) {
-        //         perror("Unable to wait child proccess");
-        //         exit(-1);
-        //     } else if (child_id == 0) {
-        //         break;
-        //     } else {
-        //         children_counter--;
-        //     }
-        // }
     }
 
     return 0;

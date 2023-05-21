@@ -1,8 +1,8 @@
-if [[ $# -ne 2 ]] ; 
+if [[ $# -ne 4 ]] ; 
 then
-    echo "You should pass 2 args: work_time_1, work_time_2"
+    echo "You should pass 4 args: ip, port, work_time_1, work_time_2"
     exit 1
 fi
 
-./first_gardener "127.0.0.1" 8080 $1 &
-./second_gardener "127.0.0.1" 8080 $2 &
+./first_gardener $1 $2 $3 &
+./second_gardener $1 $2 $4 &
