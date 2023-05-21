@@ -23,6 +23,21 @@ const char *observers_shared_object = "/posix-observers-shared-object";
 
 int pipe_fd[2];
 
+void writeEventToPipe(struct Event *event) {
+    if (write(pipe_fd[1], event, sizeof(*event)) < 0) {
+        perror("Can't write to pipe");
+        exit(-1);
+    }
+}
+
+void setEventWithCurrentTime(struct Event *event) {
+    time_t timer;
+    struct tm *tm_info;
+    timer = time(NULL);
+    tm_info = localtime(&timer);
+    strftime(event->timestamp, sizeof(event->timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+}
+
 int createServerSocket(in_addr_t sin_addr, int port) {
     int server_socket;
     struct sockaddr_in server_address;
@@ -63,7 +78,12 @@ int acceptClientConnection(int server_socket) {
         exit(-1);
     }
 
-    printf("Handling client %s:%d\n", inet_ntoa(client_address.sin_addr), client_address.sin_port);
+    struct Event event;
+    setEventWithCurrentTime(&event);
+    event.type = SERVER_INFO;
+    sprintf(event.buffer, "Handling client %s:%d\n", inet_ntoa(client_address.sin_addr),
+            client_address.sin_port);
+    writeEventToPipe(&event);
 
     return client_socket;
 }
@@ -97,21 +117,6 @@ void sprintField(char *buffer, int *field, int columns, int rows) {
     }
 }
 
-void setEventWithCurrentTime(struct Event *event) {
-    time_t timer;
-    struct tm *tm_info;
-    timer = time(NULL);
-    tm_info = localtime(&timer);
-    strftime(event->timestamp, sizeof(event->timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
-}
-
-void writeEventToPipe(struct Event *event) {
-    if (write(pipe_fd[1], event, sizeof(*event)) < 0) {
-        perror("Can't write to pipe");
-        exit(-1);
-    }
-}
-
 void handleGardenPlot(sem_t *semaphores, int *field, int columns, struct GardenerTask task) {
     sem_wait(semaphores + (task.plot_i / 2 * (columns / 2) + task.plot_j / 2));
 
@@ -140,9 +145,25 @@ void handleGardenPlot(sem_t *semaphores, int *field, int columns, struct Gardene
     setEventWithCurrentTime(&finish_event);
     finish_event.type = ACTION;
     sprintf(finish_event.buffer, "Gardener %d finish work\n", task.gardener_id);
-    writeEventToPipe(&gardener_event);
+    writeEventToPipe(&finish_event);
 
     sem_post(semaphores + (task.plot_i / 2 * (columns / 2) + task.plot_j / 2));
+}
+
+void publishLostConnectionMessage(int gardener_id) {
+    struct Event finish_event;
+    setEventWithCurrentTime(&finish_event);
+    finish_event.type = SERVER_INFO;
+    sprintf(finish_event.buffer, "Lost connection with gardener %d\n", gardener_id);
+    writeEventToPipe(&finish_event);
+}
+
+void introduceNewConnection(int gardener_id) {
+    struct Event event;
+    setEventWithCurrentTime(&event);
+    event.type = SERVER_INFO;
+    sprintf(event.buffer, "New connection from gardener %d\n", gardener_id);
+    writeEventToPipe(&event);
 }
 
 void handle(int client_socket, sem_t *semaphores, int *field, struct FieldSize field_size) {
@@ -158,30 +179,32 @@ void handle(int client_socket, sem_t *semaphores, int *field, struct FieldSize f
     struct GardenerTask task;
     const int plot_handle_status = 1;
 
-    if ((bytes_received = recv(client_socket, buffer, sizeof(struct GardenerTask), 0)) < 0) {
-        perror("recv() bad");
-        exit(-1);
+    if ((bytes_received = recv(client_socket, buffer, sizeof(struct GardenerTask), MSG_NOSIGNAL)) <
+        0) {
+        publishLostConnectionMessage(task.gardener_id);
+        exit(0);
     }
     task = *((struct GardenerTask *)buffer);
 
     while (task.status != 1) {
         handleGardenPlot(semaphores, field, field_size.columns, task);
 
-        if (send(client_socket, &plot_handle_status, sizeof(int), 0) != sizeof(int)) {
-            perror("send() bad");
-            exit(-1);
+        if (send(client_socket, &plot_handle_status, sizeof(int), MSG_NOSIGNAL) != sizeof(int)) {
+            publishLostConnectionMessage(task.gardener_id);
+            exit(0);
         }
 
-        if ((bytes_received = recv(client_socket, buffer, sizeof(struct GardenerTask), 0)) < 0) {
-            perror("recv() bad");
-            exit(-1);
+        if ((bytes_received =
+                 recv(client_socket, buffer, sizeof(struct GardenerTask), MSG_NOSIGNAL)) < 0) {
+            publishLostConnectionMessage(task.gardener_id);
+            exit(0);
         }
         task = *((struct GardenerTask *)buffer);
     }
 
     if (send(client_socket, &plot_handle_status, sizeof(int), 0) != sizeof(int)) {
-        perror("send() bad");
-        exit(-1);
+        publishLostConnectionMessage(task.gardener_id);
+        exit(0);
     }
 
     close(client_socket);
@@ -305,7 +328,7 @@ void *writeInfoToConsole(void *args) {
             perror("Can't read from pipe");
             exit(-1);
         }
-        if (event.type == MAP) {
+        if (event.type == MAP || event.type == SERVER_INFO) {
             printf("%s | %s\n", event.timestamp, event.buffer);
         }
         char buffer[sizeof(event.timestamp) + sizeof(event.buffer) + 3];
@@ -326,10 +349,9 @@ void *writeInfoToConsole(void *args) {
     }
 }
 
+pthread_t writer_thread;
 void runWriter(sem_t *sem) {
-    pthread_t thread;
-
-    pthread_create(&thread, NULL, writeInfoToConsole, (void *)sem);
+    pthread_create(&writer_thread, NULL, writeInfoToConsole, (void *)sem);
 }
 
 struct Args {
@@ -341,7 +363,13 @@ void *registerObservers(void *args) {
     struct Args data = *((struct Args *)args);
     while (1) {
         int client_socket = acceptClientConnection(data.socket);
-        printf("Observer connected\n");
+
+        struct Event finish_event;
+        setEventWithCurrentTime(&finish_event);
+        finish_event.type = SERVER_INFO;
+        sprintf(finish_event.buffer, "Observer connected\n");
+        writeEventToPipe(&finish_event);
+
         struct Observer observer;
         observer.is_new = 1;
         observer.socket = client_socket;
@@ -360,15 +388,15 @@ void *registerObservers(void *args) {
     }
 }
 
-pid_t runObserverRegistrator(struct Args *args) {
+pthread_t registartor_thread;
+void runObserverRegistrator(struct Args *args) {
     struct Observer observer;
     observer.is_active = 0;
     for (int i = 0; i < 100; ++i) {
         observers[i] = observer;
     }
 
-    pthread_t thread;
-    pthread_create(&thread, NULL, registerObservers, (void *)args);
+    pthread_create(&registartor_thread, NULL, registerObservers, (void *)args);
 }
 
 int server_socket;
@@ -390,6 +418,8 @@ void waitChildProcessess() {
 void sigint_handler(int signum) {
     printf("Server stopped\n");
     waitChildProcessess();
+    pthread_cancel(registartor_thread);
+    pthread_cancel(writer_thread);
     shm_unlink(shared_object);
     shm_unlink(sem_shared_object);
     shm_unlink(observers_shared_object);
@@ -457,7 +487,13 @@ int main(int argc, char *argv[]) {
 
     signal(SIGINT, sigint_handler);
 
-    printField(field, columns, rows);
+    struct Event event;
+    setEventWithCurrentTime(&event);
+    sprintf(event.buffer, "\n");
+    sprintField(event.buffer + 1, field, columns, columns);
+    event.type = MAP;
+    writeEventToPipe(&event);
+
     while (1) {
         int client_socket = acceptClientConnection(server_socket);
 

@@ -13,7 +13,7 @@ struct FieldSize {
     int columns;
 };
 
-enum event_type { MAP, ACTION, META_INFO };
+enum event_type { MAP, ACTION, META_INFO, SERVER_INFO };
 
 struct Event {
     char timestamp[26];
