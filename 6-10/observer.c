@@ -35,7 +35,14 @@ int main(int argc, char *argv[]) {
         char buffer[1024];
         if ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) < 0) {
             perror("recv() bad");
+            close(client_socket);
             exit(-1);
+        }
+
+        if (bytes_received == sizeof(int)) {
+            printf("Server closed the connection...\n");
+            close(client_socket);
+            exit(0);
         }
 
         buffer[bytes_received] = '\0';

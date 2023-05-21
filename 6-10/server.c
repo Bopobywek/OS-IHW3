@@ -426,15 +426,23 @@ void waitChildProcessess() {
 int personal_client_socket;
 
 void sigint_handler(int signum) {
-    printf("Server stopped\n");
     waitChildProcessess();
     pthread_cancel(registartor_thread);
     pthread_cancel(writer_thread);
+    struct Observer *observers_mem = getObserversMemory();
+    for (int i = 0; i < 100; ++i) {
+        int status = 0;
+        if (observers_mem[i].is_active == 1) {
+            send(observers_mem[i].socket, &status, sizeof(int), MSG_NOSIGNAL);
+            close(observers_mem[i].socket);
+        }
+    }
     shm_unlink(shared_object);
     shm_unlink(sem_shared_object);
     shm_unlink(observers_shared_object);
     close(server_socket);
     close(observer_socket);
+    printf("Server stopped\n");
     exit(0);
 }
 
